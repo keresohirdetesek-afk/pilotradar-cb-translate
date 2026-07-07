@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>pilotRADAR CB Rádió</title>
+<style>
+  :root{
+    --body:#1c1e22; --panel:#26292f; --edge:#0e0f11;
+    --lcd-bg:#2a1c04; --lcd:#ffb135;
+    --accent:#f5d600;            /* pilotRADAR citromsárga */
+    --tx:#ff4136; --rx:#2ecc40; --tr:#7fd7ff;
+    --text:#d8dade; --muted:#8b8f97;
+    font-size:16px;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; padding:0; background:transparent;}
+  body{font-family:"Segoe UI",system-ui,sans-serif; color:var(--text); display:flex; justify-content:center; padding:12px;}
+
+  .radio{
+    width:100%; max-width:420px;
+    background:linear-gradient(180deg,#2b2e34 0%, var(--body) 55%, #141518 100%);
+    border:1px solid var(--edge); border-radius:18px;
+    box-shadow:0 12px 30px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.06);
+    padding:14px 14px 18px; user-select:none;
+  }
+
+  /* Fejléc */
+  .brand{display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;}
+  .brand .logo{font-weight:800; letter-spacing:.5px; color:var(--accent); font-size:.95rem;}
+  .brand .logo span{color:#fff; font-weight:400;}
+  .brand .model{font-size:.65rem; color:var(--muted); letter-spacing:2px;}
+
+  /* LCD kijelző */
+  .lcd{
+    background:radial-gradient(120% 140% at 50% 0%, #3a2708 0%, var(--lcd-bg) 60%);
+    border:2px solid #000; border-radius:10px;
+    box-shadow:inset 0 2px 10px rgba(0,0,0,.8);
+    padding:10px 14px; margin-bottom:12px;
+    font-family:"Consolas","Courier New",monospace; color:var(--lcd);
+    text-shadow:0 0 6px rgba(255,177,53,.5);
+  }
+  .lcd .row1{display:flex; justify-content:space-between; align-items:baseline;}
+  .lcd .chlabel{font-size:.6rem; letter-spacing:2px; opacity:.7;}
+  .lcd .ch{font-size:2.6rem; font-weight:700; line-height:1;}
+  .lcd .ch small{font-size:1rem; opacity:.75;}
+  .lcd .row2{display:flex; justify-content:space-between; font-size:.68rem; margin-top:6px; opacity:.9;}
+  .lcd .status{min-height:1em;}
+  .lcd.priv .ch{color:var(--tr); text-shadow:0 0 6px rgba(127,215,255,.5);}
+  .lcd .subtitle{
+    margin-top:6px; padding-top:6px; border-top:1px dashed rgba(255,177,53,.3);
+    font-size:.72rem; line-height:1.35; min-height:2.7em; max-height:2.7em; overflow:hidden;
+    display:none;
+  }
+  .lcd .subtitle.show{display:block;}
+  .lcd .subtitle .orig{opacity:.55;}
+  .lcd .subtitle .trans{color:var(--tr); text-shadow:0 0 5px rgba(127,215,255,.4);}
+
+  /* LED-ek */
+  .leds{display:flex; gap:14px;}
+  .led{display:flex; align-items:center; gap:5px; font-size:.6rem; letter-spacing:1px; color:var(--muted);}
+  .led i{width:10px; height:10px; border-radius:50%; background:#333; box-shadow:inset 0 0 3px #000; transition:all .1s;}
+  .led.on-tx i{background:var(--tx); box-shadow:0 0 8px var(--tx);}
+  .led.on-rx i{background:var(--rx); box-shadow:0 0 8px var(--rx);}
+
+  /* Csatorna léptető + hangerő */
+  .controls{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;}
+  .chan-btns{display:flex; gap:8px;}
+  button{
+    font-family:inherit; cursor:pointer; color:var(--text);
+    background:linear-gradient(180deg,#3a3e46,#23262b);
+    border:1px solid var(--edge); border-radius:10px;
+    box-shadow:0 3px 0 #101114, inset 0 1px 0 rgba(255,255,255,.08);
+    padding:10px 0; font-size:1.1rem; flex:1;
+  }
+  button:active{transform:translateY(2px); box-shadow:0 1px 0 #101114;}
+  .vol{display:flex; align-items:center; gap:8px; background:var(--panel); border-radius:10px; border:1px solid var(--edge); padding:0 12px;}
+  .vol label{font-size:.6rem; letter-spacing:1px; color:var(--muted);}
+  .vol input{flex:1; accent-color:var(--accent);}
+
+  /* Csatorna mód váltó */
+  .mode{display:flex; gap:8px; margin-bottom:12px;}
+  .mode button{font-size:.72rem; letter-spacing:1px; padding:9px 0; color:var(--muted);}
+  .mode button.active{color:#111; background:linear-gradient(180deg,var(--accent),#c9b000); font-weight:700;}
+  .priv-row{display:none; gap:8px; margin-bottom:12px;}
+  .priv-row.show{display:flex;}
+  .priv-row input{
+    flex:1; background:#111318; border:1px solid var(--edge); border-radius:10px;
+    color:var(--lcd); font-family:Consolas,monospace; font-size:1rem; letter-spacing:3px;
+    padding:10px 12px; text-transform:uppercase; outline:none;
+  }
+  .priv-row button{flex:0 0 auto; padding:10px 16px; font-size:.8rem;}
+
+  /* Fordító panel */
+  .translator{
+    background:var(--panel); border:1px solid var(--edge); border-radius:12px;
+    padding:10px; margin-bottom:12px;
+  }
+  .translator .head{display:flex; align-items:center; justify-content:space-between; gap:8px;}
+  .translator .head .tlabel{font-size:.68rem; letter-spacing:1.5px; color:var(--muted);}
+  .tr-toggle{
+    flex:0 0 auto; width:56px; height:28px; border-radius:14px; padding:0;
+    background:#15171b; border:1px solid var(--edge); position:relative; box-shadow:inset 0 2px 5px #000;
+  }
+  .tr-toggle i{
+    position:absolute; top:2px; left:2px; width:22px; height:22px; border-radius:50%;
+    background:linear-gradient(180deg,#4a4e56,#2a2d33); transition:all .15s;
+  }
+  .tr-toggle.on{background:#0d2b3a; border-color:#1c5d80;}
+  .tr-toggle.on i{left:30px; background:linear-gradient(180deg,var(--tr),#3a9cc4); box-shadow:0 0 10px rgba(127,215,255,.6);}
+  .translator .langs{display:none; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px;}
+  .translator .langs.show{display:grid;}
+  .translator .lg{display:flex; flex-direction:column; gap:4px;}
+  .translator .lg label{font-size:.58rem; letter-spacing:1px; color:var(--muted);}
+  .translator select{
+    background:#111318; border:1px solid var(--edge); border-radius:8px; color:var(--text);
+    padding:8px; font-size:.8rem; outline:none; width:100%;
+  }
+  .translator .warn{display:none; margin-top:8px; font-size:.62rem; color:#e8a13c; line-height:1.4;}
+  .translator .warn.show{display:block;}
+
+  /* PTT gomb */
+  .ptt{
+    width:100%; padding:26px 0; border-radius:14px; font-size:1.1rem; font-weight:800; letter-spacing:2px;
+    background:linear-gradient(180deg,#e33e33,#a11d15); color:#fff;
+    border:1px solid #6e0e08; box-shadow:0 6px 0 #5c0d07, inset 0 1px 0 rgba(255,255,255,.25);
+    touch-action:none;
+  }
+  .ptt.tx{background:linear-gradient(180deg,#ff6a5e,#c92318); box-shadow:0 1px 0 #5c0d07, inset 0 0 22px rgba(255,255,255,.25); transform:translateY(5px);}
+  .ptt:disabled{filter:grayscale(.7); opacity:.5;}
+  .hint{margin-top:8px; text-align:center; font-size:.62rem; color:var(--muted); letter-spacing:.5px;}
+
+  /* Beállítás sáv */
+  .setup{margin-top:12px; border-top:1px solid #33363c; padding-top:10px; display:grid; gap:8px;}
+  .setup input{
+    background:#111318; border:1px solid var(--edge); border-radius:8px; color:var(--text);
+    padding:8px 10px; font-size:.78rem; outline:none; width:100%;
+  }
+  .setup .rowg{display:grid; grid-template-columns:1fr 1fr; gap:8px;}
+  .connect-btn{font-size:.78rem; padding:9px 0;}
+  .connect-btn.on{color:#111; background:linear-gradient(180deg,#54e07a,#28a04a); font-weight:700;}
+</style>
+</head>
+<body>
+
+<div class="radio" id="radio">
+  <div class="brand">
+    <div class="logo">pilot<span>RADAR</span> CB</div>
+    <div class="model">WEB-40 FM · TRANSLATE</div>
+  </div>
+
+  <div class="lcd" id="lcd">
+    <div class="row1">
+      <div>
+        <div class="chlabel" id="chLabel">CSATORNA</div>
+        <div class="ch" id="chDisp">19</div>
+      </div>
+      <div class="leds">
+        <div class="led" id="ledRx"><i></i>RX</div>
+        <div class="led" id="ledTx"><i></i>TX</div>
+      </div>
+    </div>
+    <div class="row2">
+      <div class="status" id="status">Nincs kapcsolat</div>
+      <div id="users">0 fő</div>
+    </div>
+    <div class="subtitle" id="subtitle">
+      <div class="orig" id="subOrig"></div>
+      <div class="trans" id="subTrans"></div>
+    </div>
+  </div>
+
+  <div class="mode">
+    <button id="btnPub" class="active">NYILVÁNOS 1–40</button>
+    <button id="btnPriv">PRIVÁT KÓD</button>
+  </div>
+
+  <div class="priv-row" id="privRow">
+    <input id="privCode" maxlength="20" placeholder="PL. KHT2026" autocomplete="off">
+    <button id="privJoin">BELÉP</button>
+  </div>
+
+  <div class="controls" id="pubControls">
+    <div class="chan-btns">
+      <button id="chDown">▼</button>
+      <button id="chUp">▲</button>
+    </div>
+    <div class="vol">
+      <label>VOL</label>
+      <input type="range" id="vol" min="0" max="100" value="80">
+    </div>
+  </div>
+
+  <div class="translator">
+    <div class="head">
+      <div class="tlabel">FORDÍTÓ (TOLMÁCS MÓD)</div>
+      <button class="tr-toggle" id="trToggle" aria-label="Fordító be/ki"><i></i></button>
+    </div>
+    <div class="langs" id="trLangs">
+      <div class="lg">
+        <label>ÉN ÍGY BESZÉLEK</label>
+        <select id="speakLang"></select>
+      </div>
+      <div class="lg">
+        <label>ÍGY AKAROM HALLANI</label>
+        <select id="listenLang"></select>
+      </div>
+    </div>
+    <div class="warn" id="trWarn"></div>
+  </div>
+
+  <button class="ptt" id="ptt" disabled>ADÁS — NYOMVA TART</button>
+  <div class="hint">Szóköz vagy hangerő&nbsp;▲ billentyű is adás (ha a böngésző engedi)</div>
+
+  <div class="setup">
+    <div class="rowg">
+      <input id="callsign" maxlength="24" placeholder="Hívójel (pl. Bandi)">
+      <button class="connect-btn" id="connectBtn">CSATLAKOZÁS</button>
+    </div>
+    <input id="wsUrl" placeholder="wss://a-te-railway-szervered.up.railway.app">
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  // ---------- Nyelvek (kód, felismerési locale, megnevezés) ----------
+  var LANGS = [
+    ["hu","hu-HU","Magyar"],      ["en","en-US","English"],
+    ["de","de-DE","Deutsch"],     ["ro","ro-RO","Română"],
+    ["sk","sk-SK","Slovenčina"],  ["cs","cs-CZ","Čeština"],
+    ["pl","pl-PL","Polski"],      ["sl","sl-SI","Slovenščina"],
+    ["uk","uk-UA","Українська"],  ["ru","ru-RU","Русский"],
+    ["hr","hr-HR","Hrvatski"],    ["bg","bg-BG","Български"],
+    ["sr","sr-RS","Srpski"],      ["tr","tr-TR","Türkçe"],
+    ["nl","nl-NL","Nederlands"],  ["sv","sv-SE","Svenska"],
+    ["fr","fr-FR","Français"],    ["es","es-ES","Español"],
+    ["pt","pt-PT","Português"],   ["it","it-IT","Italiano"]
+  ];
+
+  // ---------- Állapot ----------
+  var ws = null, connected = false;
+  var channel = 19, privMode = false, privRoom = "";
+  var transmitting = false, receiving = false, wantTx = false;
+  var audioCtx = null, mediaStream = null, recorder = null, segTimer = null;
+  var playCursor = 0, gainNode = null;
+  var volKeyTimer = null;
+  var translateOn = false, sttRec = null, sttSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  var duckActive = false;
+
+  var $ = function(id){ return document.getElementById(id); };
+  var lcd=$("lcd"), chDisp=$("chDisp"), chLabel=$("chLabel"), statusEl=$("status"),
+      usersEl=$("users"), ptt=$("ptt"), ledRx=$("ledRx"), ledTx=$("ledTx"),
+      subtitle=$("subtitle"), subOrig=$("subOrig"), subTrans=$("subTrans");
+
+  // Nyelvválasztók feltöltése
+  LANGS.forEach(function(l){
+    var o1 = new Option(l[2], l[0]), o2 = new Option(l[2], l[0]);
+    $("speakLang").add(o1); $("listenLang").add(o2);
+  });
+  $("speakLang").value = "hu";
+  $("listenLang").value = "hu";
+
+  // Mentett beállítások (ha a környezet engedi)
+  try {
+    $("wsUrl").value = localStorage.getItem("cbWsUrl") || "";
+    $("callsign").value = localStorage.getItem("cbName") || "";
+    if (localStorage.getItem("cbSpeak"))  $("speakLang").value  = localStorage.getItem("cbSpeak");
+    if (localStorage.getItem("cbListen")) $("listenLang").value = localStorage.getItem("cbListen");
+  } catch(e){}
+  function saveLangs(){
+    try {
+      localStorage.setItem("cbSpeak", $("speakLang").value);
+      localStorage.setItem("cbListen", $("listenLang").value);
+    } catch(e){}
+  }
+  $("speakLang").addEventListener("change", saveLangs);
+  $("listenLang").addEventListener("change", saveLangs);
+
+  function setStatus(t){ statusEl.textContent = t; }
+  function roomId(){ return privMode ? "PRIV-" + privRoom : "PUB-" + channel; }
+  function locale(code){
+    for (var i=0;i<LANGS.length;i++) if (LANGS[i][0]===code) return LANGS[i][1];
+    return code;
+  }
+  function httpBase(){
+    return $("wsUrl").value.trim().replace(/^ws/, "http").replace(/\/+$/,"");
+  }
+
+  function updateLcd(){
+    if (privMode){
+      lcd.classList.add("priv");
+      chLabel.textContent = "PRIVÁT CSATORNA";
+      chDisp.innerHTML = privRoom || "----";
+    } else {
+      lcd.classList.remove("priv");
+      chLabel.textContent = "CSATORNA";
+      chDisp.innerHTML = channel + "<small> FM</small>";
+    }
+  }
+
+  // ---------- WebSocket ----------
+  function connect(){
+    var url = $("wsUrl").value.trim();
+    var name = $("callsign").value.trim() || "Ismeretlen";
+    if (!url){ setStatus("Add meg a szerver címét!"); return; }
+    try { localStorage.setItem("cbWsUrl", url); localStorage.setItem("cbName", name); } catch(e){}
+
+    if (ws) { try{ ws.close(); }catch(e){} }
+    setStatus("Kapcsolódás…");
+    ws = new WebSocket(url);
+    ws.binaryType = "arraybuffer";
+
+    ws.onopen = function(){
+      connected = true;
+      $("connectBtn").textContent = "KAPCSOLVA";
+      $("connectBtn").classList.add("on");
+      ptt.disabled = false;
+      join();
+    };
+    ws.onclose = function(){
+      connected = false; receiving = false;
+      ledRx.classList.remove("on-rx");
+      $("connectBtn").textContent = "CSATLAKOZÁS";
+      $("connectBtn").classList.remove("on");
+      ptt.disabled = true;
+      setStatus("Kapcsolat bontva");
+    };
+    ws.onerror = function(){ setStatus("Kapcsolódási hiba"); };
+
+    ws.onmessage = function(ev){
+      if (ev.data instanceof ArrayBuffer){ playSegment(ev.data); return; }
+      var m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
+      switch(m.type){
+        case "joined": setStatus("Vétel • " + m.room.replace("PUB-","CH ").replace("PRIV-","")); break;
+        case "state":
+          usersEl.textContent = m.users + " fő";
+          if (!m.busy && receiving) stopReceiving();
+          break;
+        case "tx-begin":
+          receiving = true; ledRx.classList.add("on-rx");
+          setStatus("ADÁS: " + (m.name || "?"));
+          resetPlayback();
+          clearSubtitle();
+          if (translateOn) duck(true);   // tolmács mód: eredeti hang halkítva
+          break;
+        case "tx-end":
+          stopReceiving(); rogerBeep(false);
+          break;
+        case "stt":
+          handleIncomingText(m.text, m.lang);
+          break;
+        case "busy": setStatus("FOGLALT — " + (m.txName||"?") + " ad"); cancelTx(); break;
+        case "tx-granted": startRecording(); break;
+        case "error": setStatus(m.message || "Hiba"); break;
+      }
+    };
+  }
+
+  function join(){
+    if (!connected) return;
+    var name = $("callsign").value.trim() || "Ismeretlen";
+    ws.send(JSON.stringify({ type:"join", room:roomId(), name:name }));
+    updateLcd();
+  }
+
+  function stopReceiving(){
+    receiving = false;
+    ledRx.classList.remove("on-rx");
+    duck(false);
+    if (connected) setStatus("Vétel • " + (privMode ? privRoom : "CH " + channel));
+  }
+
+  // ---------- Hang: lejátszás ----------
+  function ensureAudio(){
+    if (!audioCtx){
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      gainNode = audioCtx.createGain();
+      gainNode.connect(audioCtx.destination);
+      gainNode.gain.value = $("vol").value / 100;
+    }
+    if (audioCtx.state === "suspended") audioCtx.resume();
+  }
+  function applyVolume(){
+    if (!gainNode) return;
+    var v = $("vol").value / 100;
+    gainNode.gain.value = duckActive ? v * 0.15 : v;
+  }
+  function duck(on){ duckActive = on; applyVolume(); }
+  $("vol").addEventListener("input", applyVolume);
+
+  function resetPlayback(){ ensureAudio(); playCursor = audioCtx.currentTime + 0.15; }
+
+  function playSegment(buf){
+    ensureAudio();
+    audioCtx.decodeAudioData(buf.slice(0), function(decoded){
+      var src = audioCtx.createBufferSource();
+      src.buffer = decoded;
+      src.connect(gainNode);
+      var t = Math.max(playCursor, audioCtx.currentTime + 0.02);
+      src.start(t);
+      playCursor = t + decoded.duration;
+    }, function(){ /* sérült szegmens – kihagyjuk */ });
+  }
+
+  // ---------- Fordítás + felolvasás (vevő oldal) ----------
+  function clearSubtitle(){ subOrig.textContent=""; subTrans.textContent=""; }
+
+  function handleIncomingText(text, srcLang){
+    if (!text) return;
+    subtitle.classList.add("show");
+    subOrig.textContent = text;
+    var tl = $("listenLang").value;
+
+    if (!translateOn){ subTrans.textContent=""; return; }
+
+    if (srcLang === tl){
+      // Azonos nyelv – nincs mit fordítani, eredeti hang mehet teljes hangerőn
+      subTrans.textContent = "";
+      duck(false);
+      return;
+    }
+    fetch(httpBase() + "/translate?sl=" + encodeURIComponent(srcLang) +
+          "&tl=" + encodeURIComponent(tl) + "&q=" + encodeURIComponent(text))
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if (!d.text) return;
+        subTrans.textContent = d.text;
+        speak(d.text, tl);
+      })
+      .catch(function(){ subTrans.textContent = "(fordítási hiba)"; });
+  }
+
+  function speak(text, lang){
+    if (!("speechSynthesis" in window)) return;
+    var u = new SpeechSynthesisUtterance(text);
+    u.lang = locale(lang);
+    u.volume = $("vol").value / 100;
+    u.rate = 1.05;
+    // Nyelvhez illő hang keresése, ha van
+    var voices = speechSynthesis.getVoices();
+    for (var i=0;i<voices.length;i++){
+      if (voices[i].lang.toLowerCase().indexOf(lang.toLowerCase()) === 0){ u.voice = voices[i]; break; }
+    }
+    speechSynthesis.speak(u);
+  }
+  if ("speechSynthesis" in window) speechSynthesis.getVoices(); // hanglista előtöltése
+
+  // ---------- Beszédfelismerés (adó oldal) ----------
+  function startSTT(){
+    if (!sttSupported) return;
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    sttRec = new SR();
+    sttRec.lang = locale($("speakLang").value);
+    sttRec.continuous = true;
+    sttRec.interimResults = true;
+    sttRec.onresult = function(e){
+      var interim = "";
+      for (var i = e.resultIndex; i < e.results.length; i++){
+        var txt = e.results[i][0].transcript.trim();
+        if (e.results[i].isFinal){
+          if (txt && connected && transmitting){
+            ws.send(JSON.stringify({ type:"stt", text:txt, lang:$("speakLang").value }));
+          }
+          subtitle.classList.add("show");
+          subOrig.textContent = txt;
+        } else interim += txt;
+      }
+      if (interim){ subtitle.classList.add("show"); subOrig.textContent = interim; }
+    };
+    sttRec.onend = function(){
+      // Chrome csend esetén leáll – adás közben újraindítjuk
+      if (transmitting){ try{ sttRec.start(); }catch(e){} }
+    };
+    try{ sttRec.start(); }catch(e){}
+  }
+  function stopSTT(){
+    if (sttRec){ try{ sttRec.onend = null; sttRec.stop(); }catch(e){} sttRec = null; }
+  }
+
+  // ---------- Hang: adás ----------
+  function requestTx(){
+    if (!connected || transmitting) return;
+    wantTx = true;
+    ws.send(JSON.stringify({ type:"tx-start" }));
+  }
+
+  function startRecording(){
+    if (!wantTx) { ws.send(JSON.stringify({type:"tx-stop"})); return; }
+    ensureAudio();
+    navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:true } })
+      .then(function(stream){
+        if (!wantTx){ stream.getTracks().forEach(function(t){t.stop();}); ws.send(JSON.stringify({type:"tx-stop"})); return; }
+        mediaStream = stream;
+        transmitting = true;
+        ptt.classList.add("tx"); ledTx.classList.add("on-tx");
+        setStatus("ADÁS…");
+        clearSubtitle();
+        startSegment();
+        startSTT();   // beszédfelismerés fut az adás alatt – felirat megy a vevőknek
+        // 250 ms-onként lezárjuk a szegmenst, hogy önállóan dekódolható legyen
+        segTimer = setInterval(function(){
+          if (recorder && recorder.state === "recording") recorder.stop();
+          if (transmitting) startSegment();
+        }, 250);
+      })
+      .catch(function(){
+        setStatus("Mikrofon nem elérhető!");
+        wantTx = false;
+        ws.send(JSON.stringify({ type:"tx-stop" }));
+      });
+  }
+
+  function startSegment(){
+    var mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus"
+             : (MediaRecorder.isTypeSupported("audio/mp4") ? "audio/mp4" : "");
+    recorder = mime ? new MediaRecorder(mediaStream, { mimeType:mime, audioBitsPerSecond:32000 })
+                    : new MediaRecorder(mediaStream);
+    recorder.ondataavailable = function(e){
+      if (e.data && e.data.size > 0 && connected && transmitting){
+        e.data.arrayBuffer().then(function(ab){ if (ws && ws.readyState === 1) ws.send(ab); });
+      }
+    };
+    recorder.start();
+  }
+
+  function cancelTx(){
+    wantTx = false;
+    if (!transmitting){ ptt.classList.remove("tx"); return; }
+    transmitting = false;
+    stopSTT();
+    clearInterval(segTimer); segTimer = null;
+    if (recorder && recorder.state === "recording") recorder.stop();
+    recorder = null;
+    if (mediaStream){ mediaStream.getTracks().forEach(function(t){t.stop();}); mediaStream = null; }
+    ptt.classList.remove("tx"); ledTx.classList.remove("on-tx");
+    if (connected){
+      ws.send(JSON.stringify({ type:"tx-stop" }));
+      setStatus("Vétel • " + (privMode ? privRoom : "CH " + channel));
+    }
+    rogerBeep(true);
+  }
+
+  // Roger beep (adás végén – saját + fogadott)
+  function rogerBeep(own){
+    ensureAudio();
+    var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = "square"; o.frequency.value = own ? 1200 : 900;
+    g.gain.setValueAtTime(0.12 * ($("vol").value/100), audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.12);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime + 0.13);
+  }
+
+  // ---------- PTT kezelés ----------
+  function pttDown(e){ if(e) e.preventDefault(); ensureAudio(); requestTx(); }
+  function pttUp(e){ if(e) e.preventDefault(); cancelTx(); }
+
+  ptt.addEventListener("pointerdown", pttDown);
+  ptt.addEventListener("pointerup", pttUp);
+  ptt.addEventListener("pointercancel", pttUp);
+  ptt.addEventListener("pointerleave", function(){ if (transmitting || wantTx) cancelTx(); });
+
+  // Billentyűzet: szóköz + hangerő fel (ahol a böngésző kiengedi az eseményt)
+  document.addEventListener("keydown", function(e){
+    if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+    if (e.code === "Space"){
+      e.preventDefault();
+      if (!e.repeat) pttDown();
+    } else if (e.key === "AudioVolumeUp" || e.keyCode === 175){
+      e.preventDefault();
+      if (!transmitting && !wantTx) pttDown();
+      clearTimeout(volKeyTimer);
+      volKeyTimer = setTimeout(cancelTx, 500);
+    }
+  });
+  document.addEventListener("keyup", function(e){
+    if (e.code === "Space" || e.key === "AudioVolumeUp" || e.keyCode === 175){
+      e.preventDefault();
+      clearTimeout(volKeyTimer);
+      pttUp();
+    }
+  });
+
+  // ---------- Fordító kapcsoló ----------
+  $("trToggle").addEventListener("click", function(){
+    translateOn = !translateOn;
+    this.classList.toggle("on", translateOn);
+    $("trLangs").classList.toggle("show", translateOn);
+    subtitle.classList.toggle("show", translateOn);
+    var warn = $("trWarn");
+    if (translateOn && !sttSupported){
+      warn.textContent = "Ez a böngésző nem támogatja a beszédfelismerést – a TE adásod nem lesz feliratozva/fordítva. A bejövő adások fordítása működik. (Chrome/Edge ajánlott.)";
+      warn.classList.add("show");
+    } else {
+      warn.classList.remove("show");
+    }
+    if (!translateOn){ duck(false); clearSubtitle(); if ("speechSynthesis" in window) speechSynthesis.cancel(); }
+  });
+
+  // ---------- Csatornaváltás ----------
+  function changeChannel(d){
+    if (transmitting) cancelTx();
+    channel += d;
+    if (channel > 40) channel = 1;
+    if (channel < 1) channel = 40;
+    updateLcd();
+    join();
+  }
+  $("chUp").addEventListener("click", function(){ changeChannel(1); });
+  $("chDown").addEventListener("click", function(){ changeChannel(-1); });
+
+  // Nyilvános / privát mód
+  $("btnPub").addEventListener("click", function(){
+    privMode = false;
+    $("btnPub").classList.add("active"); $("btnPriv").classList.remove("active");
+    $("privRow").classList.remove("show"); $("pubControls").style.display = "grid";
+    updateLcd(); join();
+  });
+  $("btnPriv").addEventListener("click", function(){
+    $("btnPriv").classList.add("active"); $("btnPub").classList.remove("active");
+    $("privRow").classList.add("show"); $("pubControls").style.display = "none";
+  });
+  $("privJoin").addEventListener("click", function(){
+    var code = $("privCode").value.trim().toUpperCase().replace(/[^A-Z0-9]/g,"");
+    if (code.length < 4){ setStatus("Min. 4 karakteres kód kell"); return; }
+    privMode = true; privRoom = code;
+    updateLcd(); join();
+  });
+
+  $("connectBtn").addEventListener("click", connect);
+  updateLcd();
+})();
+</script>
+</body>
+</html>
