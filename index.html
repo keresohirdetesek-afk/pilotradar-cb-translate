@@ -139,6 +139,9 @@
   .setup .rowg{display:grid; grid-template-columns:1fr 1fr; gap:8px;}
   .connect-btn{font-size:.78rem; padding:9px 0;}
   .connect-btn.on{color:#111; background:linear-gradient(180deg,#54e07a,#28a04a); font-weight:700;}
+  .setup details{margin-top:2px;}
+  .setup summary{font-size:.6rem; letter-spacing:1px; color:var(--muted); cursor:pointer; padding:2px 0;}
+  .setup details input{margin-top:6px;}
 </style>
 </head>
 <body>
@@ -210,17 +213,21 @@
   </div>
 
   <button class="ptt" id="ptt" disabled>ADÁS — NYOMVA TART</button>
-  <div class="hint">Szóköz vagy hangerő&nbsp;▲ billentyű is adás (ha a böngésző engedi)</div>
+  <div class="hint">Add meg a hívójeled és nyomd meg a CSATLAKOZÁST — nem kell szerver.</div>
 
   <div class="setup">
     <div class="rowg">
       <input id="callsign" maxlength="24" placeholder="Hívójel (pl. Bandi)">
       <button class="connect-btn" id="connectBtn">CSATLAKOZÁS</button>
     </div>
-    <input id="wsUrl" placeholder="wss://a-te-railway-szervered.up.railway.app">
+    <details>
+      <summary>Haladó beállítás (nem kötelező)</summary>
+      <input id="broker" placeholder="wss://broker.emqx.io:8084/mqtt">
+    </details>
   </div>
 </div>
 
+<script src="mqtt.min.js"></script>
 <script>
 (function(){
   "use strict";
@@ -239,8 +246,11 @@
     ["pt","pt-PT","Português"],   ["it","it-IT","Italiano"]
   ];
 
+  var DEFAULT_BROKER = "wss://broker.emqx.io:8084/mqtt";
+
   // ---------- Állapot ----------
-  var ws = null, connected = false;
+  var mq = null, connected = false, clientId = "";
+  var topicBase = "", topicCtl = "", topicAudio = "";
   var channel = 19, privMode = false, privRoom = "";
   var transmitting = false, receiving = false, wantTx = false;
   var audioCtx = null, mediaStream = null, recorder = null, segTimer = null;
@@ -248,6 +258,9 @@
   var volKeyTimer = null;
   var translateOn = false, sttRec = null, sttSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
   var duckActive = false;
+  var peers = {};                 // id -> { name, t } jelenlét-nyilvántartás
+  var presenceTimer = null, rxWatch = null;
+  var currentRemoteTx = null, currentRemoteTxName = "";
 
   var $ = function(id){ return document.getElementById(id); };
   var lcd=$("lcd"), chDisp=$("chDisp"), chLabel=$("chLabel"), statusEl=$("status"),
@@ -264,11 +277,12 @@
 
   // Mentett beállítások (ha a környezet engedi)
   try {
-    $("wsUrl").value = localStorage.getItem("cbWsUrl") || "";
+    $("broker").value = localStorage.getItem("cbBroker") || DEFAULT_BROKER;
     $("callsign").value = localStorage.getItem("cbName") || "";
     if (localStorage.getItem("cbSpeak"))  $("speakLang").value  = localStorage.getItem("cbSpeak");
     if (localStorage.getItem("cbListen")) $("listenLang").value = localStorage.getItem("cbListen");
-  } catch(e){}
+  } catch(e){ $("broker").value = DEFAULT_BROKER; }
+  if (!$("broker").value) $("broker").value = DEFAULT_BROKER;
   function saveLangs(){
     try {
       localStorage.setItem("cbSpeak", $("speakLang").value);
@@ -280,13 +294,12 @@
 
   function setStatus(t){ statusEl.textContent = t; }
   function roomId(){ return privMode ? "PRIV-" + privRoom : "PUB-" + channel; }
+  function myName(){ return $("callsign").value.trim() || "Ismeretlen"; }
   function locale(code){
     for (var i=0;i<LANGS.length;i++) if (LANGS[i][0]===code) return LANGS[i][1];
     return code;
   }
-  function httpBase(){
-    return $("wsUrl").value.trim().replace(/^ws/, "http").replace(/\/+$/,"");
-  }
+  function updateUsers(n){ usersEl.textContent = n + " fő"; }
 
   function updateLcd(){
     if (privMode){
@@ -300,73 +313,142 @@
     }
   }
 
-  // ---------- WebSocket ----------
+  // ---------- Kapcsolat (MQTT, nyilvános broker – nincs saját szerver) ----------
+  function brokerUrl(){
+    var b = $("broker").value.trim();
+    return b || DEFAULT_BROKER;
+  }
+
   function connect(){
-    var url = $("wsUrl").value.trim();
-    var name = $("callsign").value.trim() || "Ismeretlen";
-    if (!url){ setStatus("Add meg a szerver címét!"); return; }
-    try { localStorage.setItem("cbWsUrl", url); localStorage.setItem("cbName", name); } catch(e){}
+    if (typeof mqtt === "undefined"){ setStatus("MQTT könyvtár nem töltött be"); return; }
+    var broker = brokerUrl();
+    var name = myName();
+    try { localStorage.setItem("cbBroker", broker); localStorage.setItem("cbName", name); } catch(e){}
 
-    if (ws) { try{ ws.close(); }catch(e){} }
+    if (mq){ try{ mq.end(true); }catch(e){} mq = null; }
     setStatus("Kapcsolódás…");
-    ws = new WebSocket(url);
-    ws.binaryType = "arraybuffer";
+    clientId = "pr-" + Math.random().toString(16).slice(2,10) + Date.now().toString(16).slice(-4);
 
-    ws.onopen = function(){
+    try {
+      mq = mqtt.connect(broker, {
+        clientId: clientId, clean: true,
+        reconnectPeriod: 3000, connectTimeout: 8000, keepalive: 30
+      });
+    } catch(e){ setStatus("Hibás szervercím"); return; }
+
+    mq.on("connect", function(){
       connected = true;
       $("connectBtn").textContent = "KAPCSOLVA";
       $("connectBtn").classList.add("on");
       ptt.disabled = false;
       join();
-    };
-    ws.onclose = function(){
+      startPresence();
+    });
+    mq.on("reconnect", function(){ setStatus("Újrakapcsolódás…"); });
+    mq.on("close", function(){
+      if (!connected) return;
       connected = false; receiving = false;
       ledRx.classList.remove("on-rx");
       $("connectBtn").textContent = "CSATLAKOZÁS";
       $("connectBtn").classList.remove("on");
       ptt.disabled = true;
+      stopPresence();
       setStatus("Kapcsolat bontva");
-    };
-    ws.onerror = function(){ setStatus("Kapcsolódási hiba"); };
-
-    ws.onmessage = function(ev){
-      if (ev.data instanceof ArrayBuffer){ playSegment(ev.data); return; }
-      var m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
-      switch(m.type){
-        case "joined": setStatus("Vétel • " + m.room.replace("PUB-","CH ").replace("PRIV-","")); break;
-        case "state":
-          usersEl.textContent = m.users + " fő";
-          if (!m.busy && receiving) stopReceiving();
-          break;
-        case "tx-begin":
-          receiving = true; ledRx.classList.add("on-rx");
-          setStatus("ADÁS: " + (m.name || "?"));
-          resetPlayback();
-          clearSubtitle();
-          if (translateOn) duck(true);   // tolmács mód: eredeti hang halkítva
-          break;
-        case "tx-end":
-          stopReceiving(); rogerBeep(false);
-          break;
-        case "stt":
-          handleIncomingText(m.text, m.lang);
-          break;
-        case "busy": setStatus("FOGLALT — " + (m.txName||"?") + " ad"); cancelTx(); break;
-        case "tx-granted": startRecording(); break;
-        case "error": setStatus(m.message || "Hiba"); break;
-      }
-    };
+    });
+    mq.on("error", function(){ setStatus("Kapcsolódási hiba"); });
+    mq.on("message", onMqttMessage);
   }
+
+  function onMqttMessage(topic, payload){
+    // Bináris hangszegmens az aktuális adótól
+    if (topic === topicAudio){
+      if (transmitting) return;                 // adás közben nem játszunk le semmit (fél-duplex)
+      markReceiving();
+      var ab = payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
+      playSegment(ab);
+      return;
+    }
+    if (topic !== topicCtl) return;
+    var m; try{ m = JSON.parse(payload.toString()); }catch(e){ return; }
+    if (!m || m.id === clientId) return;         // saját üzenetet nem dolgozunk fel
+
+    switch(m.type){
+      case "hello":
+        peers[m.id] = { name: m.name || "?", t: Date.now() };
+        break;
+      case "bye":
+        delete peers[m.id];
+        if (m.id === currentRemoteTx){ stopReceiving(); }
+        break;
+      case "tx-start":
+        peers[m.id] = { name: m.name || "?", t: Date.now() };
+        if (transmitting) return;                // mi adunk – nem érdekel más adása
+        currentRemoteTx = m.id; currentRemoteTxName = m.name || "?";
+        receiving = true; ledRx.classList.add("on-rx");
+        setStatus("ADÁS: " + currentRemoteTxName);
+        resetPlayback(); clearSubtitle();
+        if (translateOn) duck(true);
+        armRxWatchdog();
+        break;
+      case "tx-stop":
+        if (m.id === currentRemoteTx){ stopReceiving(); rogerBeep(false); }
+        break;
+      case "stt":
+        if (!transmitting) handleIncomingText(m.text, m.lang);
+        break;
+    }
+  }
+
+  function pubCtl(obj){ if (mq && connected){ try{ mq.publish(topicCtl, JSON.stringify(obj), { qos:0 }); }catch(e){} } }
+  function pubAudio(ab){ if (mq && connected){ try{ mq.publish(topicAudio, new Uint8Array(ab), { qos:0 }); }catch(e){} } }
 
   function join(){
     if (!connected) return;
-    var name = $("callsign").value.trim() || "Ismeretlen";
-    ws.send(JSON.stringify({ type:"join", room:roomId(), name:name }));
+    var prevCtl = topicCtl;
+    if (prevCtl){ pubCtl({ type:"bye", id:clientId }); try{ mq.unsubscribe([topicCtl, topicAudio]); }catch(e){} }
+    if (receiving) stopReceiving();
+    peers = {}; currentRemoteTx = null;
+
+    topicBase  = "pilotradar/v2/" + roomId();
+    topicCtl   = topicBase + "/ctl";
+    topicAudio = topicBase + "/audio";
+    mq.subscribe([topicCtl, topicAudio], { qos:0 });
+    pubCtl({ type:"hello", id:clientId, name:myName() });
     updateLcd();
+    setStatus("Vétel • " + (privMode ? privRoom : "CH " + channel));
+    updateUsers(1);
+  }
+
+  // ---------- Jelenlét (résztvevők száma) ----------
+  function startPresence(){
+    stopPresence();
+    pubCtl({ type:"hello", id:clientId, name:myName() });
+    presenceTimer = setInterval(function(){
+      pubCtl({ type:"hello", id:clientId, name:myName() });
+      var now = Date.now(), cnt = 0;
+      for (var k in peers){ if (now - peers[k].t > 12000) delete peers[k]; else cnt++; }
+      updateUsers(cnt + 1);
+    }, 4000);
+  }
+  function stopPresence(){ if (presenceTimer){ clearInterval(presenceTimer); presenceTimer = null; } }
+
+  // Ha az adó hirtelen eltűnik (nincs tx-stop), időtúllépéssel zárjuk a vételt
+  function armRxWatchdog(){
+    clearTimeout(rxWatch);
+    rxWatch = setTimeout(function(){ if (receiving) stopReceiving(); }, 2000);
+  }
+  function markReceiving(){
+    if (!receiving){
+      receiving = true; ledRx.classList.add("on-rx");
+      if (translateOn) duck(true);
+    }
+    armRxWatchdog();
   }
 
   function stopReceiving(){
     receiving = false;
+    currentRemoteTx = null; currentRemoteTxName = "";
+    clearTimeout(rxWatch);
     ledRx.classList.remove("on-rx");
     duck(false);
     if (connected) setStatus("Vétel • " + (privMode ? privRoom : "CH " + channel));
@@ -421,13 +503,18 @@
       duck(false);
       return;
     }
-    fetch(httpBase() + "/translate?sl=" + encodeURIComponent(srcLang) +
-          "&tl=" + encodeURIComponent(tl) + "&q=" + encodeURIComponent(text))
+    // Fordítás közvetlenül a böngészőből (MyMemory – CORS-barát, kulcs nélkül)
+    var url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(text) +
+              "&langpair=" + encodeURIComponent(srcLang) + "|" + encodeURIComponent(tl);
+    fetch(url)
       .then(function(r){ return r.json(); })
       .then(function(d){
-        if (!d.text) return;
-        subTrans.textContent = d.text;
-        speak(d.text, tl);
+        var st = d && d.responseStatus;
+        var t  = d && d.responseData && d.responseData.translatedText;
+        if (st && Number(st) >= 400){ subTrans.textContent = "(fordítási limit)"; return; }
+        if (!t){ subTrans.textContent = "(nincs fordítás)"; return; }
+        subTrans.textContent = t;
+        speak(t, tl);
       })
       .catch(function(){ subTrans.textContent = "(fordítási hiba)"; });
   }
@@ -461,7 +548,7 @@
         var txt = e.results[i][0].transcript.trim();
         if (e.results[i].isFinal){
           if (txt && connected && transmitting){
-            ws.send(JSON.stringify({ type:"stt", text:txt, lang:$("speakLang").value }));
+            pubCtl({ type:"stt", id:clientId, name:myName(), text:txt, lang:$("speakLang").value });
           }
           subtitle.classList.add("show");
           subOrig.textContent = txt;
@@ -482,18 +569,20 @@
   // ---------- Hang: adás ----------
   function requestTx(){
     if (!connected || transmitting) return;
+    if (currentRemoteTx){ setStatus("FOGLALT — " + (currentRemoteTxName || "?") + " ad"); return; }
     wantTx = true;
-    ws.send(JSON.stringify({ type:"tx-start" }));
+    startRecording();
   }
 
   function startRecording(){
-    if (!wantTx) { ws.send(JSON.stringify({type:"tx-stop"})); return; }
+    if (!wantTx) return;
     ensureAudio();
     navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:true } })
       .then(function(stream){
-        if (!wantTx){ stream.getTracks().forEach(function(t){t.stop();}); ws.send(JSON.stringify({type:"tx-stop"})); return; }
+        if (!wantTx){ stream.getTracks().forEach(function(t){t.stop();}); return; }
         mediaStream = stream;
         transmitting = true;
+        pubCtl({ type:"tx-start", id:clientId, name:myName() });
         ptt.classList.add("tx"); ledTx.classList.add("on-tx");
         setStatus("ADÁS…");
         clearSubtitle();
@@ -508,7 +597,6 @@
       .catch(function(){
         setStatus("Mikrofon nem elérhető!");
         wantTx = false;
-        ws.send(JSON.stringify({ type:"tx-stop" }));
       });
   }
 
@@ -519,7 +607,7 @@
                     : new MediaRecorder(mediaStream);
     recorder.ondataavailable = function(e){
       if (e.data && e.data.size > 0 && connected && transmitting){
-        e.data.arrayBuffer().then(function(ab){ if (ws && ws.readyState === 1) ws.send(ab); });
+        e.data.arrayBuffer().then(function(ab){ pubAudio(ab); });
       }
     };
     recorder.start();
@@ -536,7 +624,7 @@
     if (mediaStream){ mediaStream.getTracks().forEach(function(t){t.stop();}); mediaStream = null; }
     ptt.classList.remove("tx"); ledTx.classList.remove("on-tx");
     if (connected){
-      ws.send(JSON.stringify({ type:"tx-stop" }));
+      pubCtl({ type:"tx-stop", id:clientId, name:myName() });
       setStatus("Vétel • " + (privMode ? privRoom : "CH " + channel));
     }
     rogerBeep(true);
@@ -630,6 +718,12 @@
   });
 
   $("connectBtn").addEventListener("click", connect);
+
+  // Kilépéskor jelezzük a távozást (a többiek létszáma frissüljön)
+  window.addEventListener("pagehide", function(){
+    if (mq && connected){ try{ pubCtl({ type:"bye", id:clientId }); mq.end(); }catch(e){} }
+  });
+
   updateLcd();
 })();
 </script>
