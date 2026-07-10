@@ -37,8 +37,9 @@ Töltsd fel az `index.html`-t és a `mqtt.min.js`-t ugyanabba a mappába
 2. „ÉN ÍGY BESZÉLEK”: a saját nyelved (ezen ismeri fel a beszéded).
 3. „ÍGY AKAROM HALLANI”: amilyen nyelven a bejövő adásokat hallani akarod.
 4. Adáskor a beszéded felismerésre kerül és szövegként is elmegy a csatornára.
-5. Vételkor: az eredeti hang halkan szól a háttérben, felette a gép felolvassa a
-   fordítást, az LCD-n pedig felirat megy (eredeti + fordítás).
+5. Vételkor: ha az adó más nyelven beszél, az eredeti hang NÉMÍTVA van – a
+   mondat végén a gép kimondja a fordítást a választott nyelven (az LCD-n
+   felirat is megy: eredeti + fordítás). Tehát: hang be, hang ki.
 6. Ha az adó és a hallgató nyelve azonos, nincs fordítás – az eredeti hang szól
    teljes hangerőn.
 

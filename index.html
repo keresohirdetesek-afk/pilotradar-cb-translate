@@ -261,7 +261,7 @@
   var speechUnlocked = false;
   var peers = {};                 // id -> { name, t } jelenlét-nyilvántartás
   var presenceTimer = null, rxWatch = null;
-  var currentRemoteTx = null, currentRemoteTxName = "";
+  var currentRemoteTx = null, currentRemoteTxName = "", currentRemoteTxLang = "";
 
   var $ = function(id){ return document.getElementById(id); };
   var lcd=$("lcd"), chDisp=$("chDisp"), chLabel=$("chLabel"), statusEl=$("status"),
@@ -386,10 +386,13 @@
         peers[m.id] = { name: m.name || "?", t: Date.now() };
         if (transmitting) return;                // mi adunk – nem érdekel más adása
         currentRemoteTx = m.id; currentRemoteTxName = m.name || "?";
+        currentRemoteTxLang = m.lang || "";
         receiving = true; ledRx.classList.add("on-rx");
         setStatus("ADÁS: " + currentRemoteTxName);
         resetPlayback(); clearSubtitle();
-        if (translateOn) duck(true);
+        // Tolmács mód: ha az adó más nyelven beszél, az eredeti hangot elnémítjuk –
+        // a vevő CSAK a lefordított, felolvasott hangot hallja.
+        if (translateOn && currentRemoteTxLang !== $("listenLang").value) duck(true);
         armRxWatchdog();
         break;
       case "tx-stop":
@@ -442,14 +445,15 @@
   function markReceiving(){
     if (!receiving){
       receiving = true; ledRx.classList.add("on-rx");
-      if (translateOn) duck(true);
+      // Ha lemaradtunk a tx-start-ról (később léptünk be), ismeretlen nyelvnél is némítunk
+      if (translateOn && currentRemoteTxLang !== $("listenLang").value) duck(true);
     }
     armRxWatchdog();
   }
 
   function stopReceiving(){
     receiving = false;
-    currentRemoteTx = null; currentRemoteTxName = "";
+    currentRemoteTx = null; currentRemoteTxName = ""; currentRemoteTxLang = "";
     clearTimeout(rxWatch);
     ledRx.classList.remove("on-rx");
     duck(false);
@@ -469,7 +473,8 @@
   function applyVolume(){
     if (!gainNode) return;
     var v = $("vol").value / 100;
-    gainNode.gain.value = duckActive ? v * 0.15 : v;
+    // Tolmács mód: az eredeti (idegen nyelvű) hang teljesen némítva – csak a fordítás szól
+    gainNode.gain.value = duckActive ? 0 : v;
   }
   function duck(on){ duckActive = on; applyVolume(); }
   $("vol").addEventListener("input", applyVolume);
@@ -506,6 +511,7 @@
       return;
     }
     // Fordítás közvetlenül a böngészőből (Google gtx – CORS-barát, kulcs nélkül)
+    duck(true);                        // eltérő nyelv: az eredeti hang némítva marad
     subTrans.textContent = "…";
     var url = "https://translate.googleapis.com/translate_a/single?client=gtx&dt=t" +
               "&sl=" + encodeURIComponent(srcLang) +
@@ -628,7 +634,7 @@
         if (!wantTx){ stream.getTracks().forEach(function(t){t.stop();}); return; }
         mediaStream = stream;
         transmitting = true;
-        pubCtl({ type:"tx-start", id:clientId, name:myName() });
+        pubCtl({ type:"tx-start", id:clientId, name:myName(), lang:$("speakLang").value });
         ptt.classList.add("tx"); ledTx.classList.add("on-tx");
         setStatus("ADÁS…");
         clearSubtitle();
