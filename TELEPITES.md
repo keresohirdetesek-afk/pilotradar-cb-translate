@@ -6,8 +6,8 @@ Az új változat egy nyilvános üzenetközvetítőt (MQTT broker) használ, ez�
 (HTTPS-en, hogy a mikrofon működjön), megadni egy hívójelet, és megnyomni a
 CSATLAKOZÁS gombot. Aki ugyanarra a csatornára lép, hallja egymást.
 
-A fordítás is közvetlenül a böngészőből történik (MyMemory, kulcs nélkül), így
-ahhoz sem kell háttérszerver.
+A fordítás is közvetlenül a böngészőből történik (Google fordító, kulcs nélkül),
+így ahhoz sem kell háttérszerver.
 
 ## 1. Közzététel (a legegyszerűbb: GitHub Pages)
 1. A repóban: **Settings → Pages → Deploy from a branch → `gh-pages` / root**.

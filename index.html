@@ -503,15 +503,16 @@
       duck(false);
       return;
     }
-    // Fordítás közvetlenül a böngészőből (MyMemory – CORS-barát, kulcs nélkül)
-    var url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(text) +
-              "&langpair=" + encodeURIComponent(srcLang) + "|" + encodeURIComponent(tl);
+    // Fordítás közvetlenül a böngészőből (Google gtx – CORS-barát, kulcs nélkül)
+    var url = "https://translate.googleapis.com/translate_a/single?client=gtx&dt=t" +
+              "&sl=" + encodeURIComponent(srcLang) +
+              "&tl=" + encodeURIComponent(tl) +
+              "&q="  + encodeURIComponent(text);
     fetch(url)
       .then(function(r){ return r.json(); })
-      .then(function(d){
-        var st = d && d.responseStatus;
-        var t  = d && d.responseData && d.responseData.translatedText;
-        if (st && Number(st) >= 400){ subTrans.textContent = "(fordítási limit)"; return; }
+      .then(function(data){
+        // Válasz: [[["fordítás","eredeti",...],["folytatás",...]],...]
+        var t = ((data && data[0]) || []).map(function(seg){ return seg[0]; }).join("");
         if (!t){ subTrans.textContent = "(nincs fordítás)"; return; }
         subTrans.textContent = t;
         speak(t, tl);
