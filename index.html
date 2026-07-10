@@ -499,17 +499,18 @@
 
     if (srcLang === tl){
       // Azonos nyelv – nincs mit fordítani, eredeti hang mehet teljes hangerőn
-      subTrans.textContent = "";
+      subTrans.textContent = "(azonos nyelv – nincs fordítás)";
       duck(false);
       return;
     }
     // Fordítás közvetlenül a böngészőből (Google gtx – CORS-barát, kulcs nélkül)
+    subTrans.textContent = "…";
     var url = "https://translate.googleapis.com/translate_a/single?client=gtx&dt=t" +
               "&sl=" + encodeURIComponent(srcLang) +
               "&tl=" + encodeURIComponent(tl) +
               "&q="  + encodeURIComponent(text);
     fetch(url)
-      .then(function(r){ return r.json(); })
+      .then(function(r){ if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(function(data){
         // Válasz: [[["fordítás","eredeti",...],["folytatás",...]],...]
         var t = ((data && data[0]) || []).map(function(seg){ return seg[0]; }).join("");
@@ -517,7 +518,7 @@
         subTrans.textContent = t;
         speak(t, tl);
       })
-      .catch(function(){ subTrans.textContent = "(fordítási hiba)"; });
+      .catch(function(){ subTrans.textContent = "(fordítási hiba – ellenőrizd a netkapcsolatot)"; });
   }
 
   function speak(text, lang){
@@ -556,6 +557,22 @@
         } else interim += txt;
       }
       if (interim){ subtitle.classList.add("show"); subOrig.textContent = interim; }
+    };
+    sttRec.onerror = function(ev){
+      // A "no-speech"/"aborted" normális (csend, újraindítás) – csak az érdemi hibát jelezzük
+      var err = ev && ev.error;
+      if (err === "no-speech" || err === "aborted") return;
+      var warn = $("trWarn"), msg;
+      if (err === "not-allowed" || err === "service-not-allowed")
+        msg = "A beszédfelismeréshez engedélyezd a mikrofont (és HTTPS kell). Így a TE adásod nem lesz feliratozva/fordítva.";
+      else if (err === "audio-capture")
+        msg = "A mikrofont nem éri el a beszédfelismerő (más app használja?). A TE adásod nem lesz feliratozva/fordítva.";
+      else if (err === "network")
+        msg = "A beszédfelismerés hálózati hibát adott. A TE adásod feliratozása most nem megy.";
+      else if (err === "language-not-supported")
+        msg = "Az „ÉN ÍGY BESZÉLEK” nyelvet ez a böngésző nem ismeri fel. Válassz másikat.";
+      else msg = "Beszédfelismerés hiba: " + err;
+      warn.textContent = msg; warn.classList.add("show");
     };
     sttRec.onend = function(){
       // Chrome csend esetén leáll – adás közben újraindítjuk
