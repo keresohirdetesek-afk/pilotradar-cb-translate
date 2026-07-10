@@ -258,6 +258,7 @@
   var volKeyTimer = null;
   var translateOn = false, sttRec = null, sttSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
   var duckActive = false;
+  var speechUnlocked = false;
   var peers = {};                 // id -> { name, t } jelenlét-nyilvántartás
   var presenceTimer = null, rxWatch = null;
   var currentRemoteTx = null, currentRemoteTxName = "";
@@ -321,6 +322,7 @@
 
   function connect(){
     if (typeof mqtt === "undefined"){ setStatus("MQTT könyvtár nem töltött be"); return; }
+    unlockSpeech();                     // hangfeloldás a felhasználói koppintáskor (mobil)
     var broker = brokerUrl();
     var name = myName();
     try { localStorage.setItem("cbBroker", broker); localStorage.setItem("cbName", name); } catch(e){}
@@ -521,20 +523,46 @@
       .catch(function(){ subTrans.textContent = "(fordítási hiba – ellenőrizd a netkapcsolatot)"; });
   }
 
+  // Mobil böngészők csak felhasználói koppintás után engednek gépi felolvasást –
+  // a CSATLAKOZÁS és a PTT egy ilyen koppintás, ott feloldjuk egy néma mondattal.
+  function unlockSpeech(){
+    if (!("speechSynthesis" in window) || speechUnlocked) return;
+    try {
+      var u = new SpeechSynthesisUtterance(" ");
+      u.volume = 0;
+      speechSynthesis.speak(u);
+      speechUnlocked = true;
+    } catch(e){}
+  }
+
   function speak(text, lang){
     if (!("speechSynthesis" in window)) return;
+    try { speechSynthesis.resume(); } catch(e){}   // Chrome néha magától "felfüggeszti"
     var u = new SpeechSynthesisUtterance(text);
-    u.lang = locale(lang);
+    var loc = locale(lang);
+    u.lang = loc;
     u.volume = $("vol").value / 100;
-    u.rate = 1.05;
-    // Nyelvhez illő hang keresése, ha van
-    var voices = speechSynthesis.getVoices();
+    u.rate = 1.0;
+    // Nyelvhez illő hang keresése (előbb pontos locale, majd nyelvkód szerint)
+    var voices = speechSynthesis.getVoices(), pick = null;
     for (var i=0;i<voices.length;i++){
-      if (voices[i].lang.toLowerCase().indexOf(lang.toLowerCase()) === 0){ u.voice = voices[i]; break; }
+      var vl = voices[i].lang.toLowerCase().replace("_","-");
+      if (vl === loc.toLowerCase()){ pick = voices[i]; break; }
+      if (!pick && vl.indexOf(lang.toLowerCase()) === 0) pick = voices[i];
+    }
+    if (pick) u.voice = pick;
+    else if (voices.length){
+      // Nincs telepített hang ehhez a nyelvhez – jelezzük (a felirat attól még látszik)
+      var warn = $("trWarn");
+      warn.textContent = "Ehhez a nyelvhez nincs telepített gépi hang a készüléken, ezért a fordítást nem tudja felolvasni (a felirat megjelenik).";
+      warn.classList.add("show");
     }
     speechSynthesis.speak(u);
   }
-  if ("speechSynthesis" in window) speechSynthesis.getVoices(); // hanglista előtöltése
+  if ("speechSynthesis" in window){
+    speechSynthesis.getVoices();                                    // hanglista előtöltése
+    speechSynthesis.onvoiceschanged = function(){ speechSynthesis.getVoices(); };
+  }
 
   // ---------- Beszédfelismerés (adó oldal) ----------
   function startSTT(){
@@ -660,7 +688,7 @@
   }
 
   // ---------- PTT kezelés ----------
-  function pttDown(e){ if(e) e.preventDefault(); ensureAudio(); requestTx(); }
+  function pttDown(e){ if(e) e.preventDefault(); ensureAudio(); unlockSpeech(); requestTx(); }
   function pttUp(e){ if(e) e.preventDefault(); cancelTx(); }
 
   ptt.addEventListener("pointerdown", pttDown);
