@@ -256,7 +256,7 @@
   var audioCtx = null, mediaStream = null, recorder = null, segTimer = null;
   var playCursor = 0, gainNode = null;
   var volKeyTimer = null;
-  var translateOn = false, sttRec = null, sttSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  var translateOn = false, sttSupported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
   var duckActive = false;
   var speechUnlocked = false;
   var peers = {};                 // id -> { name, t } jelenlét-nyilvántartás
@@ -571,28 +571,49 @@
   }
 
   // ---------- Beszédfelismerés (adó oldal) ----------
+  // A PTT elengedése UTÁN a felismerő még ~1 mp-ig dolgozik a mondat végén.
+  // Ezért elengedéskor nem dobjuk el: megvárjuk a végleges szöveget (max 3 mp),
+  // és ha addig sem jön, az utolsó közbenső változatot küldjük el.
+  var sttState = null;   // { rec, interim, flushed, timer } – adásonként saját állapot
+
+  function sendSttText(txt){
+    if (!txt || !connected) return;
+    pubCtl({ type:"stt", id:clientId, name:myName(), text:txt, lang:$("speakLang").value });
+  }
+
+  function flushSttState(st){
+    if (!st || st.flushed) return;
+    st.flushed = true;
+    clearTimeout(st.timer);
+    if (st.interim){ sendSttText(st.interim); st.interim = ""; }
+    if (sttState === st) sttState = null;
+  }
+
   function startSTT(){
     if (!sttSupported) return;
+    flushSttState(sttState);   // az előző adás függő mondata menjen el most
     var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    sttRec = new SR();
-    sttRec.lang = locale($("speakLang").value);
-    sttRec.continuous = true;
-    sttRec.interimResults = true;
-    sttRec.onresult = function(e){
+    var rec = new SR();
+    var st = { rec: rec, interim: "", flushed: false, timer: null };
+    sttState = st;
+    rec.lang = locale($("speakLang").value);
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.onresult = function(e){
+      if (st.flushed) return;   // lezárás után már elküldtük a közbenső szöveget
       var interim = "";
       for (var i = e.resultIndex; i < e.results.length; i++){
         var txt = e.results[i][0].transcript.trim();
         if (e.results[i].isFinal){
-          if (txt && connected && transmitting){
-            pubCtl({ type:"stt", id:clientId, name:myName(), text:txt, lang:$("speakLang").value });
-          }
+          sendSttText(txt);
+          st.interim = "";
           subtitle.classList.add("show");
           subOrig.textContent = txt;
         } else interim += txt;
       }
-      if (interim){ subtitle.classList.add("show"); subOrig.textContent = interim; }
+      if (interim){ st.interim = interim; subtitle.classList.add("show"); subOrig.textContent = interim; }
     };
-    sttRec.onerror = function(ev){
+    rec.onerror = function(ev){
       // A "no-speech"/"aborted" normális (csend, újraindítás) – csak az érdemi hibát jelezzük
       var err = ev && ev.error;
       if (err === "no-speech" || err === "aborted") return;
@@ -608,14 +629,20 @@
       else msg = "Beszédfelismerés hiba: " + err;
       warn.textContent = msg; warn.classList.add("show");
     };
-    sttRec.onend = function(){
+    rec.onend = function(){
       // Chrome csend esetén leáll – adás közben újraindítjuk
-      if (transmitting){ try{ sttRec.start(); }catch(e){} }
+      if (transmitting && sttState === st){ try{ rec.start(); }catch(e){} }
+      else flushSttState(st);     // elengedés után: lezárás, függő szöveg elküldése
     };
-    try{ sttRec.start(); }catch(e){}
+    try{ rec.start(); }catch(e){}
   }
+
   function stopSTT(){
-    if (sttRec){ try{ sttRec.onend = null; sttRec.stop(); }catch(e){} sttRec = null; }
+    // PTT elengedve: hagyjuk, hogy a felismerő befejezze a mondatot.
+    var st = sttState;
+    if (!st) return;
+    try{ st.rec.stop(); }catch(e){ flushSttState(st); return; }
+    st.timer = setTimeout(function(){ flushSttState(st); }, 3000);  // biztonsági határidő
   }
 
   // ---------- Hang: adás ----------
