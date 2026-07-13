@@ -586,6 +586,16 @@
     st.flushed = true;
     clearTimeout(st.timer);
     if (st.interim){ sendSttText(st.interim); st.interim = ""; }
+    if (st.track){ try{ st.track.stop(); }catch(e){} st.track = null; }
+    // Ha az egész adásból egyetlen szót sem hallott a felismerő, jelezzük az adónak
+    if (!st.gotAnything && translateOn && Date.now() - st.startedAt > 1500){
+      var warn = $("trWarn");
+      warn.textContent = "A beszédfelismerő nem hallott érthető beszédet az adásod alatt, " +
+        "ezért a többiek nem kapnak feliratot/fordítást tőled. Ha ez minden adásnál így van, " +
+        "ezen a készüléken a böngésző nem tudja megosztani a mikrofont az adás és a felismerő között – " +
+        "próbáld számítógépes Chrome/Edge böngészőből, vagy frissítsd a böngészőt a legújabbra.";
+      warn.classList.add("show");
+    }
     if (sttState === st) sttState = null;
   }
 
@@ -594,13 +604,20 @@
     flushSttState(sttState);   // az előző adás függő mondata menjen el most
     var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     var rec = new SR();
-    var st = { rec: rec, interim: "", flushed: false, timer: null };
+    var st = { rec: rec, interim: "", flushed: false, timer: null,
+               track: null, gotAnything: false, startedAt: Date.now() };
     sttState = st;
+    // Ha a böngésző tudja, a felismerő ugyanazt a mikrofonjelet kapja, amit az adás
+    // (különben pl. Androidon a második mikrofonhasználat némán elhal)
+    if (mediaStream){
+      try { st.track = mediaStream.getAudioTracks()[0].clone(); } catch(e){ st.track = null; }
+    }
     rec.lang = locale($("speakLang").value);
     rec.continuous = true;
     rec.interimResults = true;
     rec.onresult = function(e){
       if (st.flushed) return;   // lezárás után már elküldtük a közbenső szöveget
+      if (!st.gotAnything){ st.gotAnything = true; $("trWarn").classList.remove("show"); }
       var interim = "";
       for (var i = e.resultIndex; i < e.results.length; i++){
         var txt = e.results[i][0].transcript.trim();
@@ -629,12 +646,20 @@
       else msg = "Beszédfelismerés hiba: " + err;
       warn.textContent = msg; warn.classList.add("show");
     };
+    // Indítás: ha lehet, a meglévő mikrofonsávval; ha a böngésző ezt nem tudja, simán
+    function startRec(){
+      if (st.track){
+        try { rec.start(st.track); return; }
+        catch(e){ try{ st.track.stop(); }catch(_){} st.track = null; }
+      }
+      try{ rec.start(); }catch(e){}
+    }
     rec.onend = function(){
       // Chrome csend esetén leáll – adás közben újraindítjuk
-      if (transmitting && sttState === st){ try{ rec.start(); }catch(e){} }
+      if (transmitting && sttState === st) startRec();
       else flushSttState(st);     // elengedés után: lezárás, függő szöveg elküldése
     };
-    try{ rec.start(); }catch(e){}
+    startRec();
   }
 
   function stopSTT(){
