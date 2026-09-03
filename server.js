@@ -10,17 +10,53 @@ const { WebSocketServer } = require("ws");
 
 const PORT = process.env.PORT || 8080;
 
-// ---------- Fordítás (Google gtx végpont, kulcs nélkül) ----------
-async function translate(sl, tl, q) {
+// ---------- Fordítás ----------
+// A Google gtx végpontot (kulcs nélkül) a Google rendszeresen blokkolja
+// adatközponti/felhős IP-kről (429 "Sorry... automated queries") — pont
+// olyanokról, mint a Railway. Ezért a MyMemory API az elsődleges: az nem
+// tiltja a felhős forgalmat, és szintén kulcs nélkül működik. Ha bármi okból
+// mégis hibázna (napi kvóta, átmeneti kiesés), a Google a tartalék.
+//
+// MyMemory ingyenes kerete: kb. napi 5000 karakter e-mail nélkül, 50 000
+// karakter egy regisztrált e-mail címmel (MYMEMORY_EMAIL env változó) —
+// kísérési rádióforgalomra ez bőven elég.
+async function translateViaMyMemory(sl, tl, q) {
+  const email = process.env.MYMEMORY_EMAIL || "";
+  const url = "https://api.mymemory.translated.net/get?langpair=" +
+    encodeURIComponent(sl) + "|" + encodeURIComponent(tl) +
+    "&q=" + encodeURIComponent(q) +
+    (email ? "&de=" + encodeURIComponent(email) : "");
+  const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+  if (!res.ok) throw new Error("mymemory HTTP " + res.status);
+  const data = await res.json();
+  const text = data && data.responseData && data.responseData.translatedText;
+  // Kvótatúllépésnél a MyMemory 200-at ad, de a szövegbe írja a hibát.
+  if (!text || /MYMEMORY WARNING/i.test(text)) throw new Error("mymemory: " + (text || "üres válasz"));
+  return text;
+}
+
+async function translateViaGoogle(sl, tl, q) {
   const url = "https://translate.googleapis.com/translate_a/single?client=gtx&dt=t" +
     "&sl=" + encodeURIComponent(sl) +
     "&tl=" + encodeURIComponent(tl) +
     "&q=" + encodeURIComponent(q);
   const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
-  if (!res.ok) throw new Error("translate HTTP " + res.status);
+  if (!res.ok) throw new Error("google HTTP " + res.status);
   const data = await res.json();
   // A válasz: [[["fordítás","eredeti",...],["folytatás",...]],...]
   return (data[0] || []).map(seg => seg[0]).join("");
+}
+
+async function translate(sl, tl, q) {
+  try {
+    return await translateViaMyMemory(sl, tl, q);
+  } catch (e1) {
+    try {
+      return await translateViaGoogle(sl, tl, q);
+    } catch (e2) {
+      throw new Error("mindkét fordító hibázott: " + e1.message + " / " + e2.message);
+    }
+  }
 }
 
 const server = http.createServer(async (req, res) => {
